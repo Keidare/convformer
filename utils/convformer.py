@@ -50,7 +50,7 @@ class ConvFormer(nn.Module):
 
         # Last stage: 2 AttnBlocks
         stage = nn.Sequential(
-            *[AttnBlock(dim=dims[3], sr_ratio=4, head=8, dpr=dp_rates[cur + j], final=(j == 1)) for j in range(2)]
+            *[AttnBlock(dim=dims[3], sr_ratio=4, head=8, dpr=dp_rates[cur + j]) for j in range(2)]
         )
 
         self.stages.append(stage)
@@ -106,7 +106,7 @@ class ConvFormer(nn.Module):
 x = torch.randn(1, 3, 1024, 512)
 
 # Instantiate the model
-model = ConvFormer()
+model = ConvFormer(num_classes=200)
 
 # Forward pass
 output = model(x)
