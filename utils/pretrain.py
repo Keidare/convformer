@@ -5,6 +5,7 @@ from tqdm import tqdm
 import random, os, logging
 import numpy as np
 from convmit import ConvMiT
+from convformer import ConvFormer
 def set_seed(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -39,7 +40,7 @@ def train(logs_root):
     os.makedirs(model_path, exist_ok=True)
 
     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-    net = ConvMiT('B1', 200)
+    net = ConvFormer(num_classes= 200)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     epoch_begin = 0
     model_files = sorted(os.listdir(model_path))
@@ -84,7 +85,7 @@ def train(logs_root):
         t0 = time.time()
         net.eval()
         losses = 0
-        correct = 0
+        correct_top5 = 0
         total = 0
         with torch.no_grad():
             for batch in tqdm(val_loader):
@@ -92,12 +93,18 @@ def train(logs_root):
 
                 out = net(images)
                 loss = criterion(out, labels)
-                preds = out.argmax(dim=1)
-                # Count correct predictions
-                correct += (preds == labels).sum().item()
+                # Get top-5 predictions
+                top5_preds = torch.topk(out, 5, dim=1).indices  
+
+                # Check if the correct label is in the top 5 predictions
+                top5_correct = top5_preds.eq(labels.view(-1, 1)).sum().item()  
+
+                # Track correct predictions
+                correct_top5 += top5_correct
+
                 total += labels.size(0)
                 losses += loss.detach()
-        accuracy = correct / total * 100  # Percentage
+        accuracy = correct_top5 / total * 100  # Percentage
         loss_val = losses / len(val_loader)
         t1 = time.time()
         time_val = t1 - t0
@@ -116,6 +123,6 @@ def train(logs_root):
         }, model_file)
 
 if __name__ == '__main__':
-    train(logs_root = 'logs/cityscapes/ConvMitTest')
+    train(logs_root = 'logs/tinyImageNet/ConvFormerTest')
 
 

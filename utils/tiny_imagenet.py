@@ -26,7 +26,7 @@ def tiny_imagenet():
     train_ds = load_dataset('zh-plus/tiny-imagenet', split='train').map(lambda batch: apply_transform(batch, train_transform), batched=True).with_format('torch')
     val_ds = load_dataset('zh-plus/tiny-imagenet', split='valid').map(lambda batch: apply_transform(batch, val_transform), batched=True).with_format('torch')
 
-    train_loader = DataLoader(train_ds, batch_size=512, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=512, shuffle=False)  
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=256, shuffle=False)  
     
     return train_loader, val_loader

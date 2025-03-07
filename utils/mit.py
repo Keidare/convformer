@@ -160,7 +160,13 @@ class MiT(nn.Module):
             x = blk(x, H, W)
         x4 = self.norm4(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)
 
-        # Pass feature maps to classifier
-        logits = self.classifier((x1, x2, x3, x4))
+        return x1,x2,x3,x4
 
-        return logits  # Shape: [B, num_classes]
+
+model = MiT('B1')
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) 
+non_trainable_params = sum(p.numel() for p in model.parameters() if not p.requires_grad) 
+
+print(f"Trainable Parameters: {trainable_params}")
+print(f"Non-trainable Parameters: {non_trainable_params}")
+print(f"Total Parameters: {trainable_params + non_trainable_params}")

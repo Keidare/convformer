@@ -8,12 +8,13 @@ from mit import MiT
 from convmit import ConvMiT, MiT
 from sklearn.preprocessing import LabelEncoder
 import numpy as np
+from convformer import ConvFormer
 
 
 # Define transformations
 train_transform = transforms.Compose([
     transforms.Lambda(lambda img: img.convert("RGB")),
-    transforms.Resize((224, 224)),  # Resize images
+    transforms.Resize((128, 128)),  # Resize images
     transforms.RandomHorizontalFlip(p=0.5),  # Augmentation: Flip image
     transforms.ToTensor(),  # Convert image to tensor
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalize
@@ -21,7 +22,7 @@ train_transform = transforms.Compose([
 
 val_transform = transforms.Compose([
     transforms.Lambda(lambda img: img.convert("RGB")),
-    transforms.Resize((224, 224)),
+    transforms.Resize((128, 128)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
@@ -40,8 +41,8 @@ train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 val_dataset.dataset.transform = val_transform  # Overwrite transform for validation
 
 # Create DataLoaders
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
 def set_seed(seed):
     random.seed(seed)
@@ -78,12 +79,12 @@ def train(logs_root):
     os.makedirs(model_path, exist_ok=True)
 
     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-    net = MiT(model_name='B1', num_classes=101)
+    net = ConvFormer(num_classes = 101)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     epoch_begin = 0
     model_files = sorted(os.listdir(model_path))
     net = net.to(device)
-    optimizer = torch.optim.AdamW(net.parameters(), lr=1e-4, weight_decay=0.05)
+    optimizer = torch.optim.AdamW(net.parameters(), lr=1e-5, weight_decay=0.05)
     if len(model_files):
         checkpoint_path = os.path.join(model_path, model_files[-1])
         print('Load Checkpoint -> ', checkpoint_path)
@@ -292,6 +293,99 @@ def trainconvmit(logs_root):
             'loss': loss_val.item(),
         }, model_file)
 
+def trainMIT(logs_root):
+    set_seed(1234)
+    os.makedirs(logs_root, exist_ok=True)
+    model_path = os.path.join(logs_root, 'models')
+    os.makedirs(model_path, exist_ok=True)
+
+    logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
+    net = MiT(num_classes=101,model_name="B1")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    epoch_begin = 0
+    model_files = sorted(os.listdir(model_path))
+    net = net.to(device)
+    optimizer = torch.optim.AdamW(net.parameters(), lr=1e-4, weight_decay=0.05)
+    if len(model_files):
+        checkpoint_path = os.path.join(model_path, model_files[-1])
+        print('Load Checkpoint -> ', checkpoint_path)
+        checkpoint = torch.load(checkpoint_path)
+        net.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        epoch_begin = checkpoint['epoch']
+    criterion = torch.nn.CrossEntropyLoss()
+    num_epochs = 35
+
+    num_params = sum(p.numel() for p in net.parameters())
+
+    logger.info(f'Number of parameters: {num_params}')
+    logger.info(net)
+    print(f'Starting epoch: {epoch_begin}')
+    print(f'Total epochs: {num_epochs}')
+    logger.info('| %12s | %12s | %12s | %12s | %12s |' %
+                ('epoch', 'time_train', 'loss_train', 'loss_val', 'accuracy'))
+    
+    for epoch in range(epoch_begin,num_epochs):
+        t0 = time.time()
+        net.train()
+        losses = 0
+        for x, y in tqdm(train_loader):
+            x = x.to(device)
+            y = y.to(device)
+
+            optimizer.zero_grad(set_to_none=True)
+
+            out = net(x)
+            loss = criterion(out, y)
+
+            loss.backward()
+            optimizer.step()
+
+            losses += loss.detach()
+
+        loss_train = losses / len(train_loader)
+        t1 = time.time()
+        time_train = t1 - t0
+
+        t0 = time.time()
+        net.eval()
+        losses = 0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for x, y in tqdm(val_loader):
+                x = x.to(device)
+                y = y.to(device)
+
+                out = net(x)
+                loss = criterion(out, y)
+
+                losses += loss.detach()
+                
+                preds = out.argmax(dim=1)
+                
+                # Count correct predictions
+                correct += (preds == y).sum().item()
+                total += y.size(0)
+
+        # Compute final accuracy
+        accuracy = correct / total * 100  # Percentage
+        loss_val = losses / len(val_loader)
+        loss_val = losses / len(val_loader)
+        t1 = time.time()
+        time_val = t1 - t0
+
+        time_total = time_train + time_val
+        logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f' %
+                    (epoch + 1, time_total, loss_train, loss_val, accuracy))
+
+        model_file = os.path.join(model_path, 'model_%03d.pt' % (epoch + 1))
+        torch.save({
+            'epoch': epoch + 1,
+            'model': net.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'loss': loss_val.item(),
+        }, model_file)
 
 if __name__ == '__main__':
-    train('./logs/caltech/02252025SegFormerv2')
+    train('./logs/caltech/06032025ConvFormerv2')

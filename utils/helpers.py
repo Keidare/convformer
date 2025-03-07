@@ -256,18 +256,22 @@ class Attention(nn.Module):
         return x
 
 class MLP(nn.Module):
-    def __init__(self, c1, c2):
+    def __init__(self, c1, c2, drop = 0.):
         super().__init__()
         self.fc1 = nn.Linear(c1, c2)
         self.dwconv = DWConv(c2)
         self.fc2 = nn.Linear(c2, c1)
+        self.drop = nn.Dropout(drop)
+
         
     def forward(self, x: Tensor, H, W) -> Tensor:
         # print(f"[MLP] Input Shape: {x.shape}")  # Debug
         x = self.fc1(x)
         x = self.dwconv(x, H, W)
         x = F.gelu(x)
+        x = self.drop(x)
         out = self.fc2(x)
+        out = self.drop(out)
         # print(f"[MLP] Output Shape: {out.shape}")  # Debug
         return out
 
@@ -285,18 +289,16 @@ class DWConv(nn.Module):
         return x.flatten(2).transpose(1, 2)
 
 class AttnBlock(nn.Module):
-    def __init__(self, dim, head, sr_ratio=1, dpr=0.):
+    def __init__(self, dim, head, sr_ratio=1, dpr=0., drop = 0.):
         super().__init__()
-        self.cpe = RepCPE(dim)  # Conditional Positional Encoding
         self.norm1 = nn.LayerNorm(dim)
         self.attn = Attention(dim, head, sr_ratio)
         self.drop_path = DropPath(dpr) if dpr > 0. else nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
-        self.mlp = MLP(dim, int(dim * 4))
+        self.mlp = MLP(dim, int(dim * 4), drop=drop)
 
     def forward(self, x: Tensor, H, W) -> Tensor:
         # Apply RepCPE (Input: B, C, H, W)
-        x = self.cpe(x)  # Output remains (B, C, H, W)
 
         # Flatten to (B, N, C) for Attention, where N = H * W
         B, C, H, W = x.shape
