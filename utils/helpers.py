@@ -276,18 +276,6 @@ class MLP(nn.Module):
         return out
 
     
-    
-class DWConv(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dwconv = nn.Conv2d(dim, dim, 3, 1, 1, groups=dim)
-
-    def forward(self, x: Tensor, H, W) -> Tensor:
-        B, _, C = x.shape
-        x = x.transpose(1, 2).view(B, C, H, W)
-        x = self.dwconv(x)
-        return x.flatten(2).transpose(1, 2)
-
 class AttnBlock(nn.Module):
     def __init__(self, dim, head, sr_ratio=1, dpr=0., drop = 0.):
         super().__init__()
@@ -296,10 +284,11 @@ class AttnBlock(nn.Module):
         self.drop_path = DropPath(dpr) if dpr > 0. else nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = MLP(dim, int(dim * 4), drop=drop)
+        self.cpe = RepCPE(dim)
 
     def forward(self, x: Tensor, H, W) -> Tensor:
         # Apply RepCPE (Input: B, C, H, W)
-
+        x = self.cpe(x)
         # Flatten to (B, N, C) for Attention, where N = H * W
         B, C, H, W = x.shape
         x = x.flatten(2).transpose(1, 2)  # Reshape (B, C, H*W) -> (B, N, C)
@@ -314,7 +303,19 @@ class AttnBlock(nn.Module):
         x = x.transpose(1, 2).view(B, C, H, W)
         # print(f"[AttnBlock] Reshaped Back to: {x.shape}")  # Debug
 
-        return x
+        return x   
+
+
+class DWConv(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dwconv = nn.Conv2d(dim, dim, 3, 1, 1, groups=dim)
+
+    def forward(self, x: Tensor, H, W) -> Tensor:
+        B, _, C = x.shape
+        x = x.transpose(1, 2).view(B, C, H, W)
+        x = self.dwconv(x)
+        return x.flatten(2).transpose(1, 2)
 
 
 

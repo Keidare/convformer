@@ -12,7 +12,7 @@ class ConvFormer(nn.Module):
             layer_scale_init_value = 0,
             head_init_scale = 1.,
             drop_path_rate = 0.,
-            downsample_kernels = [3,3,3,3],
+            downsample_kernels = [5,3,3,3],
             act_layer = nn.GELU
             ):
         super().__init__()
@@ -39,10 +39,10 @@ class ConvFormer(nn.Module):
             self.stages.append(stage)
             cur += 2
 
-        # Third stage: 9 ConvBlocks, 9 AttnBlocks, 1 ConvBlock
+        # Third stage: 9 ConvBlocks, 3 AttnBlocks, 1 ConvBlock
         stage = nn.Sequential(
             *[ConvBlock(dim=dims[2], drop_path=dp_rates[cur + j], layer_scale_init_value=layer_scale_init_value) for j in range(9)],
-            *[AttnBlock(dim=dims[2], sr_ratio=4, head=5, dpr=dp_rates[cur + 9 + j]) for j in range(3)],
+            *[AttnBlock(dim=dims[2], sr_ratio=2, head=5, dpr=dp_rates[cur + 9 + j]) for j in range(3)],
             ConvBlock(dim=dims[2], drop_path=dp_rates[cur + 18], layer_scale_init_value=layer_scale_init_value)
         )
         self.stages.append(stage)
@@ -50,7 +50,7 @@ class ConvFormer(nn.Module):
 
         # Last stage: 2 AttnBlocks
         stage = nn.Sequential(
-            *[AttnBlock(dim=dims[3], sr_ratio=2, head=8, dpr=dp_rates[cur + j]) for j in range(2)]
+            *[AttnBlock(dim=dims[3], sr_ratio=1, head=8, dpr=dp_rates[cur + j]) for j in range(2)]
         )
 
         self.stages.append(stage)
