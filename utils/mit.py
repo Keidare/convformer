@@ -132,7 +132,7 @@ class MiT(nn.Module):
         self.block4 = nn.ModuleList([Block(embed_dims[3], 8, 1, dpr[cur+i]) for i in range(depths[3])])
         self.norm4 = nn.LayerNorm(embed_dims[3])
 
-        self.classifier = SegFormerClassifier(embed_dims, num_classes=num_classes)
+        self.classification_head = nn.Linear(embed_dims[3], num_classes) if num_classes > 0 else nn.Identity()
     def forward(self, x: Tensor) -> Tensor:
         B = x.shape[0]
 
@@ -159,14 +159,9 @@ class MiT(nn.Module):
         for blk in self.block4:
             x = blk(x, H, W)
         x4 = self.norm4(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)
+                # Global Average Pooling for Classification
+        x_cls = x4.mean(dim=[2, 3])  # GAP (B, C)
+        logits = self.classification_head(x_cls)  # (B, num_classes)
+        return logits
 
-        return x1,x2,x3,x4
 
-
-model = MiT('B1')
-trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) 
-non_trainable_params = sum(p.numel() for p in model.parameters() if not p.requires_grad) 
-
-print(f"Trainable Parameters: {trainable_params}")
-print(f"Non-trainable Parameters: {non_trainable_params}")
-print(f"Total Parameters: {trainable_params + non_trainable_params}")

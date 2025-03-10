@@ -5,6 +5,7 @@ from tqdm import tqdm
 import random, os, logging
 import numpy as np
 from convmit import ConvMiT
+from mit import MiT
 from convformer import ConvFormer
 import torchvision
 from torchmetrics.classification import MulticlassF1Score
@@ -90,7 +91,7 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
     os.makedirs(model_path, exist_ok=True)
 
     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-    net = ConvFormer(num_classes=num_classes, img_height = img_height, img_width = img_width)
+    net = MiT(model_name='B1',num_classes=200)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     epoch_begin = 0
     model_files = sorted(os.listdir(model_path))
@@ -234,7 +235,7 @@ def evaluate(val_loader, checkpoint_path, device, img_height = 64, img_width = 6
 
 
 if __name__ == '__main__':
-    train('./logs/tinyImageNet/ConvFormerV1',learning_rate=1e-3,weight_decay=0.02,num_classes=200,num_epochs=100, img_height = 64, img_width = 64)
+    train('./logs/tinyImageNet/MiT',learning_rate=1e-3,weight_decay=0.02,num_classes=200,num_epochs=100)
 
 
 

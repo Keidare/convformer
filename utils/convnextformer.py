@@ -1,4 +1,5 @@
-from helpers import *
+import torchsummary
+from new_helpers import *
 import torch.nn
 import torch.nn.functional as F
 import torch
@@ -8,51 +9,52 @@ class ConvFormer(nn.Module):
             self,
             num_classes = 101,
             depths = [2,2,19,2],
-            dims = [64, 128, 320, 512],
+            dims = [96, 192, 384, 768],
             layer_scale_init_value = 0,
             head_init_scale = 1.,
             drop_path_rate = 0.,
-            downsample_kernels = [5,3,3,3],
-            act_layer = nn.GELU
+            img_width = 224,
+            img_height = 224
             ):
         super().__init__()
-        self.downsamples = nn.ModuleList()
         self.stages = nn.ModuleList()
-        stem_kernel = downsample_kernels[0]
+        self.downsample_layers = nn.ModuleList() # stem and 3 intermediate downsampling conv layers
         stem = nn.Sequential(
-            Conv2d_LN(3, dims[0] // 2, stem_kernel, 2, padding=stem_kernel // 2),
-            act_layer(),
-            EdgeResidual(dims[0] // 2, dims[0], stem_kernel, 2, exp_ratio=4, act_layer=act_layer)
+            nn.Conv2d(3, dims[0], kernel_size=4, stride=4),
+            LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
         )
-        self.downsamples.append(stem)
+        self.downsample_layers.append(stem)
         for i in range(3):
-            downsample_layer = Downsample(dims[i], dims[i+1])
-            self.downsamples.append(downsample_layer)
+            downsample_layer = nn.Sequential(
+                    LayerNorm(dims[i], eps=1e-6, data_format="channels_first"),
+                    nn.Conv2d(dims[i], dims[i+1], kernel_size=2, stride=2),
+            )
+            self.downsample_layers.append(downsample_layer)
         self.stages = nn.ModuleList()
         dp_rates = [x.item() for x in torch.linspace(0,drop_path_rate, sum(depths))]
         cur = 0
         # First two stages with 2 ConvBlocks each
         for i in range(2):
             stage = nn.Sequential(
-                *[ConvBlock(dim=dims[i], drop_path=dp_rates[cur + j], layer_scale_init_value=layer_scale_init_value,ratio=3) for j in range(2)]
+                *[Block(dim=dims[i], drop_path=dp_rates[cur + j], layer_scale_init_value=layer_scale_init_value) for j in range(2)]
             )
             self.stages.append(stage)
             cur += 2
 
         # Third stage: 9 ConvBlocks, 3 AttnBlocks, 1 ConvBlock
         stage = nn.Sequential(
-            *[ConvBlock(dim=dims[2], drop_path=dp_rates[cur + j], layer_scale_init_value=layer_scale_init_value) for j in range(9)],
-            AttnBlock(dim=dims[2], sr_ratio=2, head=5, dpr=dp_rates[cur + 10]),
-            AttnBlock(dim=dims[2], sr_ratio=2, head=5, dpr=dp_rates[cur + 13]),
-            AttnBlock(dim=dims[2], sr_ratio=2, head=5, dpr=dp_rates[cur + 16]),
-            ConvBlock(dim=dims[2], drop_path=dp_rates[cur + 18], layer_scale_init_value=layer_scale_init_value)
+            *[Block(dim=dims[2], drop_path=dp_rates[cur + j], layer_scale_init_value=layer_scale_init_value) for j in range(9)],
+            AttnBlock(dim=dims[2], sr_ratio=2, head=4, dpr=dp_rates[cur + 10], img_height= img_height, img_width= img_width),
+            AttnBlock(dim=dims[2], sr_ratio=2, head=4, dpr=dp_rates[cur + 13], img_height= img_height, img_width= img_width),
+            AttnBlock(dim=dims[2], sr_ratio=2, head=4, dpr=dp_rates[cur + 16], img_height= img_height, img_width= img_width),
+            Block(dim=dims[2], drop_path=dp_rates[cur + 18], layer_scale_init_value=layer_scale_init_value)
         )
         self.stages.append(stage)
         cur += 19
 
         # Last stage: 2 AttnBlocks
         stage = nn.Sequential(
-            *[AttnBlock(dim=dims[3], sr_ratio=1, head=8, dpr=dp_rates[cur + j]) for j in range(2)]
+            *[AttnBlock(dim=dims[3], sr_ratio=1, head=8, dpr=dp_rates[cur + j], img_height= img_height, img_width= img_width) for j in range(2)]
         )
 
         self.stages.append(stage)
@@ -74,7 +76,7 @@ class ConvFormer(nn.Module):
         # print(f"Input Shape: {x.shape}")  # Check input shape
 
         for i in range(4):
-            x = self.downsamples[i](x)  # Apply downsampling
+            x = self.downsample_layers[i](x)  # Apply downsampling
             # print(f"After Downsampling {i}: {x.shape}")
 
             # Extract H, W if x is in (B, C, H, W) format
