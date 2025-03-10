@@ -67,12 +67,11 @@ class DoubleConv(nn.Module):
         return self.conv(x)
     
 class LayerNorm(nn.Module):
-    r""" LayerNorm that supports two data formats: channels_last (default) or channels_first.
-    The ordering of the dimensions in the inputs. channels_last corresponds to inputs with
-    shape (batch_size, height, width, channels) while channels_first corresponds to inputs
+    r""" LayerNorm that supports two data formats: channels_last (default) or channels_first. 
+    The ordering of the dimensions in the inputs. channels_last corresponds to inputs with 
+    shape (batch_size, height, width, channels) while channels_first corresponds to inputs 
     with shape (batch_size, channels, height, width).
     """
-
     def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(normalized_shape))
@@ -80,9 +79,9 @@ class LayerNorm(nn.Module):
         self.eps = eps
         self.data_format = data_format
         if self.data_format not in ["channels_last", "channels_first"]:
-            raise NotImplementedError
-        self.normalized_shape = (normalized_shape,)
-
+            raise NotImplementedError 
+        self.normalized_shape = (normalized_shape, )
+    
     def forward(self, x):
         if self.data_format == "channels_last":
             return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
@@ -92,29 +91,6 @@ class LayerNorm(nn.Module):
             x = (x - u) / torch.sqrt(s + self.eps)
             x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
-        
-import torch
-import torch.nn as nn
-
-class Conv2d_LN(nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding=0, 
-                 dilation=1, groups=1, ln_eps=1e-6):
-        super().__init__()
-        
-        self.add_module('conv', nn.Conv2d(
-            in_channels, out_channels, kernel_size, stride, padding, 
-            dilation, groups, bias=False
-        ))
-
-        # LayerNorm on channels
-        self.add_module('ln', nn.LayerNorm(out_channels, eps=ln_eps))
-
-    def forward(self, x):
-        x = self.conv(x)  # Apply Conv2D
-        x = x.permute(0, 2, 3, 1)  # Change to (B, H, W, C) for LayerNorm
-        x = self.ln(x)  # Apply LayerNorm
-        x = x.permute(0, 3, 1, 2)  # Change back to (B, C, H, W)
-        return x
 
 
 
@@ -137,86 +113,43 @@ class Residual(torch.nn.Module):
             return x + self.drop_path(self.m(x))
         
 
-class FFN2d(nn.Module):
-    def __init__(self,
-                 dim,
-                 drop_path=0.,
-                 layer_scale_init_value=1e-6,
-                 ratio=4,
-                 act_layer=nn.GELU,
-                 **kargs):
+class Block(nn.Module):
+    r""" ConvNeXt Block. There are two equivalent implementations:
+    (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
+    (2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
+    We use (2) as we find it slightly faster in PyTorch
+    
+    Args:
+        dim (int): Number of input channels.
+        drop_path (float): Stochastic depth rate. Default: 0.0
+        layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
+    """
+    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6):
         super().__init__()
-        mid_chs = ratio * dim
-        self.channel_mixer = Residual(nn.Sequential(
-            Conv2d_LN(dim, mid_chs),
-            act_layer(),
-            Conv2d_LN(mid_chs, dim)),
-            drop_path=drop_path,
-            layer_scale_init_value=layer_scale_init_value,
-            dim=dim,
-        )
+        self.dwconv = nn.Conv2d(dim, dim, kernel_size=7, padding=3, groups=dim) # depthwise conv
+        self.norm = LayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, 4 * dim) # pointwise/1x1 convs, implemented with linear layers
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * dim, dim)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
+                                    requires_grad=True) if layer_scale_init_value > 0 else None
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, x):
-        if isinstance(x, tuple):
-            return self.channel_mixer(x[0]), x[1]
-        else:
-            return self.channel_mixer(x)
+        input = x
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+        x = self.norm(x)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        if self.gamma is not None:
+            x = self.gamma * x
+        x = x.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
 
-class ConvBlock(nn.Module):
-    def __init__(self,
-                 dim,
-                 out_dim=None,
-                 drop_path=0.,
-                 layer_scale_init_value=1e-6,
-                 kernel=7,
-                 stride=1,
-                 ratio=4,
-                 act_layer=nn.GELU,
-                 reparameterize=False,
-                 **kargs):
-        super().__init__()
-        mid_chs = ratio * dim
-        if out_dim is None:
-            out_dim = dim
-        if reparameterize:
-            assert stride == 1
-            dw_conv = eval(reparameterize)(dim, kernel)
-        else:
-            dw_conv = Conv2d_LN(dim, dim, kernel, stride, padding=kernel // 2, groups=dim)  # depthwise conv
-            
-        self.token_channel_mixer = Residual(nn.Sequential(
-            dw_conv,
-            Conv2d_LN(dim, mid_chs),
-            act_layer(),
-            Conv2d_LN(mid_chs, out_dim)),
-            drop_path=drop_path,
-            layer_scale_init_value=layer_scale_init_value,
-            dim=out_dim,
-        )
-
-    def forward(self, x):
-        if isinstance(x, tuple):
-            out = self.token_channel_mixer(x[0])
-            # print(f"ConvBlock Output Shape: {out.shape}")  # Debugging Output
-            return out, x[1]
-        
-        else:
-            out = self.token_channel_mixer(x)
-            # print(f"ConvBlock Output Shape: {out.shape}")  # Debugging Output
-            return out
-        
-class RepCPE(nn.Module):
-    def __init__(self, dim, kernel=7, **kargs):
-        super().__init__()
-        self.cpe = Residual(
-            Conv2d_LN(dim, dim, kernel, 1, padding=kernel//2, groups=dim)  # depthwise conv with LN
-        )
-
-    def forward(self, x):
-        # print(f"[RepCPE] Input Shape: {x[0].shape if isinstance(x, tuple) else x.shape}")  # Debug
-        out = self.cpe(x[0]) if isinstance(x, tuple) else self.cpe(x)
-        # print(f"[RepCPE] Output Shape: {out.shape}")  # Debug
-        return (out, x[1]) if isinstance(x, tuple) else out
+        x = input + self.drop_path(x)
+        # print(f'[ConvBlock] Output after ConvBlock: {x.shape}')
+        return x
 
 class Attention(nn.Module):
     def __init__(self, dim, head, sr_ratio):
@@ -277,34 +210,31 @@ class MLP(nn.Module):
 
     
 class AttnBlock(nn.Module):
-    def __init__(self, dim, head, sr_ratio=1, dpr=0., drop = 0.):
+    def __init__(self, dim, head, sr_ratio=1, dpr=0., drop=0., img_width = 64, img_height = 64):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         self.attn = Attention(dim, head, sr_ratio)
         self.drop_path = DropPath(dpr) if dpr > 0. else nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = MLP(dim, int(dim * 4), drop=drop)
-        self.cpe = RepCPE(dim)
+
+        # Learnable positional encoding
+        self.pos_embed = nn.Parameter(torch.zeros(1, img_width * img_height, dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)  # Initialize the positional encoding
 
     def forward(self, x: Tensor, H, W) -> Tensor:
-        # Apply RepCPE (Input: B, C, H, W)
-        x = self.cpe(x)
-        # Flatten to (B, N, C) for Attention, where N = H * W
         B, C, H, W = x.shape
+        # print(x.shape)
         x = x.flatten(2).transpose(1, 2)  # Reshape (B, C, H*W) -> (B, N, C)
+        
+        # Add positional encoding
+        x = x + self.pos_embed[:, :H * W, :]
 
-        # print(f"[AttnBlock] Shape Before Attention: {x.shape}")  # Debug
         x = x + self.drop_path(self.attn(self.norm1(x), H, W))
-        # print(f"[AttnBlock] Shape Before MLP: {x.shape}")  # Debug
         x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
-        # print(f"[AttnBlock] Shape After MLP: {x.shape}")  # Debug
 
-        # Fix: Reshape back to (B, C, H, W) before returning
-        x = x.transpose(1, 2).view(B, C, H, W)
-        # print(f"[AttnBlock] Reshaped Back to: {x.shape}")  # Debug
-
-        return x   
-
+        x = x.transpose(1, 2).view(B, C, H, W)  # Reshape back to (B, C, H, W)
+        return x
 
 class DWConv(nn.Module):
     def __init__(self, dim):
@@ -316,32 +246,6 @@ class DWConv(nn.Module):
         x = x.transpose(1, 2).view(B, C, H, W)
         x = self.dwconv(x)
         return x.flatten(2).transpose(1, 2)
-
-
-
-class EdgeResidual(nn.Module):
-    """ FusedIB in MobileNetV4-like architectures, adapted to use LayerNorm instead of BatchNorm.
-    """
-    def __init__(self,
-                 in_chs: int,
-                 out_chs: int,
-                 exp_kernel_size=3,
-                 stride=1,
-                 exp_ratio=1.0,
-                 act_layer=nn.ReLU,
-                 ):
-        super(EdgeResidual, self).__init__()
-        mid_chs = int(in_chs * exp_ratio)
-        
-        self.conv_exp_ln1 = Conv2d_LN(in_chs, mid_chs, exp_kernel_size, stride, padding=exp_kernel_size//2)
-        self.act = act_layer()
-        self.conv_pwl_ln2 = Conv2d_LN(mid_chs, out_chs, 1)
-
-    def forward(self, x):
-        x = self.conv_exp_ln1(x)
-        x = self.act(x)
-        x = self.conv_pwl_ln2(x)
-        return x
 
 
 class Classfier(nn.Module):
@@ -364,16 +268,3 @@ class BN_Linear(torch.nn.Sequential):
             torch.nn.init.constant_(self.l.bias, 0)
 
 
-
-
-class Downsample(nn.Module):
-    def __init__(self, in_dim, out_dim):
-        super().__init__()
-        self.downsample = nn.Sequential(
-            LayerNorm(in_dim, eps=1e-6, data_format="channels_first"),  # Channel-first LayerNorm
-            nn.Conv2d(in_dim, out_dim, kernel_size=2, stride=2)  # 2x2 strided convolution
-        )
-
-    def forward(self, x):
-        return self.downsample(x)
-    

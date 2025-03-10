@@ -1,4 +1,3 @@
-from sklearn.metrics import f1_score
 import torch
 import time,os,logging,random
 from tqdm import tqdm
@@ -44,18 +43,16 @@ val_dataset.dataset.transform = val_transform  # Overwrite transform for validat
 
 # Create DataLoaders
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False,num_workers=0)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
 def set_seed(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False  # Important for full determinism
 
 
 def make_logger(name=None, filename="test.log"):
@@ -122,7 +119,7 @@ def train(logs_root):
     os.makedirs(model_path, exist_ok=True)
 
     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-    net = ConvFormer(num_classes=101)
+    net = ConvFormer(num_classes=101, img_height=128, img_width=128)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     epoch_begin = 0
     model_files = sorted(os.listdir(model_path))
@@ -201,15 +198,12 @@ def train(logs_root):
                 # Count correct predictions
                 correct += (preds == y).sum().item()
                 total += y.size(0)
-                batch_accuracy = (preds == y).sum().item() / y.size(0) * 100
-                print(f"Batch Accuracy: {batch_accuracy:.2f}%")
 
-        accuracy = correct / total * 100  # Compute validation accuracy
+        # Compute final accuracy
+        accuracy = correct / total * 100  # Percentage
         loss_val = losses / len(val_loader)
         t1 = time.time()
         time_val = t1 - t0
-
-        print(f"Epoch {epoch+1}: Validation Accuracy = {accuracy:.2f}%")
 
         time_total = time_train + time_val
         logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f' %
@@ -224,23 +218,15 @@ def train(logs_root):
         }, model_file)
 
 def eval():
-    set_seed(1234)
     net = ConvFormer(num_classes=101)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     net.to(device)
-    
-    checkpoint = torch.load('./logs/caltech/06032025ConvFormerv224x224/models/model_096.pt')
+    checkpoint = torch.load('./logs/caltech/06032025ConvFormerv224x224/models/model_101.pt')
     net.load_state_dict(checkpoint['model'])
-    
     criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
-    
     losses = 0
     correct = 0
     total = 0
-    all_preds = []
-    all_labels = []
-    
-    net.eval()
     with torch.no_grad():
         for x, y in tqdm(val_loader):
             x = x.to(device)
@@ -248,15 +234,12 @@ def eval():
 
             out = net(x)
             loss = criterion(out, y)
-            losses += loss.detach().item()
+
+            losses += loss.detach()
 
             # Get predicted class (assuming classification task)
             preds = out.argmax(dim=1)
-
-            # Store predictions and labels for F1 calculation
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(y.cpu().numpy())
-
+            
             # Count correct predictions
             correct += (preds == y).sum().item()
             total += y.size(0)
@@ -265,12 +248,7 @@ def eval():
     accuracy = correct / total * 100  # Percentage
     loss_val = losses / len(val_loader)
 
-    # Compute F1 score (macro average for multi-class classification)
-    f1 = f1_score(all_labels, all_preds, average='macro') * 100  # Convert to percentage
-
-    print(f"Total Loss: {losses:.4f}, Avg Loss: {loss_val:.4f}, Accuracy: {accuracy:.2f}%, F1 Score: {f1:.2f}%")
-
-
+    print(loss_val, accuracy)
 
 def trainconvmit(logs_root):
     set_seed(1234)
@@ -461,4 +439,4 @@ def trainMIT(logs_root):
         }, model_file)
 
 if __name__ == '__main__':
-    eval()
+    train('./logs/caltech/FinalTestV2')
