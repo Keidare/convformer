@@ -4,12 +4,12 @@ import torch.nn
 import torch.nn.functional as F
 import torch
 
-class ConvFormer(nn.Module):
+class ConvNextFormer(nn.Module):
     def __init__(
             self,
             num_classes = 101,
             depths = [2,2,19,2],
-            dims = [96, 192, 384, 768],
+            dims = [128, 256, 512, 1024],
             layer_scale_init_value = 0,
             head_init_scale = 1.,
             drop_path_rate = 0.,

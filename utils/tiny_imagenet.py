@@ -8,7 +8,6 @@ def tiny_imagenet():
         transforms.Lambda(lambda img: img.convert("RGB")),  # Convert grayscale to RGB
         transforms.RandomHorizontalFlip(),  # Random horizontal flip
         transforms.ToTensor(),
-        transforms.RandomErasing(p=0.5, scale=(0.02, 0.2), ratio=(0.3, 3.3), value=0),  # Random Erasing
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     

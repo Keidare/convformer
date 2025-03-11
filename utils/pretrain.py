@@ -7,6 +7,7 @@ import numpy as np
 from convmit import ConvMiT
 from mit import MiT
 from convformer import ConvFormer
+from convnextformer import ConvNextFormer
 import torchvision
 from torchmetrics.classification import MulticlassF1Score
 
@@ -91,7 +92,7 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
     os.makedirs(model_path, exist_ok=True)
 
     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-    net = MiT(model_name='B1',num_classes=200)
+    net = ConvNextFormer(num_classes=num_classes, img_height = img_height, img_width = img_width)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     epoch_begin = 0
     model_files = sorted(os.listdir(model_path))
@@ -122,12 +123,21 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
 
         for batch in tqdm(train_loader, desc="Training"):
             images, labels = batch['image'].to(device), batch['label'].to(device)
-
             optimizer.zero_grad(set_to_none=True)
-
-            out = net(images)
-            loss = criterion(out, labels)  # Missing in your code
-
+            
+            p = np.random.rand()
+            if p < 0.2:
+                images, labels_a, labels_b, lam = mixup_data(images, labels)
+                out = net(images)
+                loss = lam * criterion(out, labels_a) + (1 - lam) * criterion(out, labels_b)
+            elif p < 0.4:
+                images, labels_a, labels_b, lam = cutmix_data(images, labels)
+                out = net(images)
+                loss = lam * criterion(out, labels_a) + (1 - lam) * criterion(out, labels_b)
+            else:
+                out = net(images)
+                loss = criterion(out, labels)
+            
             loss.backward()
             optimizer.step()
             losses += loss.detach()
@@ -148,18 +158,14 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Evaluating"):
                 images, labels = batch['image'].to(device), batch['label'].to(device)
-
                 out = net(images)
                 loss = criterion(out, labels)
                 losses += loss.detach()
-
                 preds = out.argmax(dim=1)
                 f1_metric.update(preds, labels)
-
                 correct_top1 += (preds == labels).sum().item()
                 top5_preds = torch.topk(out, 5, dim=1).indices
                 correct_top5 += top5_preds.eq(labels.view(-1, 1)).sum().item()
-
                 total += labels.size(0)
 
         accuracy = correct_top1 / total * 100
@@ -168,7 +174,6 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
         loss_val = losses / len(val_loader)
         t1 = time.time()
         time_val = t1 - t0
-
         time_total = time_train + time_val
 
         logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f | %12.4f | %12.4f |' % 
@@ -235,7 +240,7 @@ def evaluate(val_loader, checkpoint_path, device, img_height = 64, img_width = 6
 
 
 if __name__ == '__main__':
-    train('./logs/tinyImageNet/MiT',learning_rate=1e-3,weight_decay=0.02,num_classes=200,num_epochs=100)
+    train('./logs/tinyImageNet/ConvFormerV1',learning_rate=1e-4,weight_decay=0.05,num_classes=200,num_epochs=100, img_height = 64, img_width = 64)
 
 
 
