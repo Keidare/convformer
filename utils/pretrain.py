@@ -1,4 +1,4 @@
-import tiny_imagenet
+from tiny_imagenet_local import prep
 import torch
 import time
 from tqdm import tqdm
@@ -10,89 +10,23 @@ from convformer import ConvFormer
 from convnextformer import ConvNextFormer
 import torchvision
 from torchmetrics.classification import MulticlassF1Score
+from torch.utils.data import DataLoader
+from convnext import ConvNeXt
+from caltech import set_seed, make_logger, cutmix_data, mixup_data, load_caltech256, load_caltech101
 
 
 
-def set_seed(seed):
-    random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-
-def make_logger(name=None, filename="test.log"):
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter("%(asctime)s - %(message)s")
-
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    console.setFormatter(formatter)
-    logger.addHandler(console)
-
-    file_handler = logging.FileHandler(filename=filename)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    return logger
-
-def mixup_data(x, y, alpha=1.0):
-    """Apply Mixup augmentation."""
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-
-    # Ensure tensor format
-    if not isinstance(x, torch.Tensor):
-        x = torchvision.transforms.ToTensor()(x)
-
-    batch_size = x.size()[0]
-    index = torch.randperm(batch_size).to(x.device)
-
-    mixed_x = lam * x + (1 - lam) * x[index, :]
-    y_a, y_b = y, y[index]
-    return mixed_x, y_a, y_b, lam
-
-
-def cutmix_data(x, y, alpha=1.0):
-    """Apply CutMix augmentation."""
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-
-    # Ensure the image is a tensor
-    if isinstance(x, torch.Tensor):
-        batch_size, _, H, W = x.size()
-    else:
-        x = torchvision.transforms.ToTensor()(x)  # Convert PIL image to tensor
-        batch_size, _, H, W = x.size()
-
-    index = torch.randperm(batch_size).to(x.device)
-
-    # Random bbox
-    cx, cy = np.random.randint(W), np.random.randint(H)
-    bw, bh = int(W * np.sqrt(1 - lam)), int(H * np.sqrt(1 - lam))
-    x1, x2 = max(cx - bw // 2, 0), min(cx + bw // 2, W)
-    y1, y2 = max(cy - bh // 2, 0), min(cy + bh // 2, H)
-
-    x[:, :, y1:y2, x1:x2] = x[index, :, y1:y2, x1:x2]
-    y_a, y_b = y, y[index]
-    return x, y_a, y_b, lam
-
-
-def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_height= 64, img_width= 64):
-    train_loader, val_loader = tiny_imagenet.tiny_imagenet()
+def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, batch_size):
+    train_ds, val_ds = prep()
+    train_loader = DataLoader(train_ds, batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds,batch_size,shuffle=False)
     set_seed(1234)
     os.makedirs(logs_root, exist_ok=True)
     model_path = os.path.join(logs_root, 'models')
     os.makedirs(model_path, exist_ok=True)
 
     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-    net = ConvNextFormer(num_classes=num_classes, img_height = img_height, img_width = img_width)
+    net = ConvNextFormer(num_classes=num_classes, img_height=64,img_width=64)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     epoch_begin = 0
     model_files = sorted(os.listdir(model_path))
@@ -110,6 +44,7 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
     criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
     num_epochs = num_epochs
     f1_metric = MulticlassF1Score(num_classes=num_classes, average='macro').to(device)
+    logger.info(sum(p.numel() for p in net.parameters()))
 
     print(f'Starting epoch: {epoch_begin}')
     print(f'Total epochs: {num_epochs}')
@@ -121,23 +56,20 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
         net.train()
         losses = 0
 
-        for batch in tqdm(train_loader, desc="Training"):
-            images, labels = batch['image'].to(device), batch['label'].to(device)
+        for x,y in tqdm(train_loader, desc="Training"):
+            images, labels = x.to(device), y.to(device)
             optimizer.zero_grad(set_to_none=True)
             
-            p = np.random.rand()
-            if p < 0.2:
-                images, labels_a, labels_b, lam = mixup_data(images, labels)
-                out = net(images)
-                loss = lam * criterion(out, labels_a) + (1 - lam) * criterion(out, labels_b)
-            elif p < 0.4:
-                images, labels_a, labels_b, lam = cutmix_data(images, labels)
-                out = net(images)
-                loss = lam * criterion(out, labels_a) + (1 - lam) * criterion(out, labels_b)
-            else:
-                out = net(images)
-                loss = criterion(out, labels)
-            
+            # if np.random.rand() < 0.5:
+            #     images, y_a, y_b, lam = mixup_data(images, labels, alpha=1.0)
+            #     out = net(images)
+            #     loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
+            # else:
+            #     images, y_a, y_b, lam = cutmix_data(images, labels, alpha=1.0)
+            #     out = net(images)
+            #     loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
+            out = net(images)
+            loss = criterion(out, labels)
             loss.backward()
             optimizer.step()
             losses += loss.detach()
@@ -156,8 +88,8 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
         f1_metric.reset()
 
         with torch.no_grad():
-            for batch in tqdm(val_loader, desc="Evaluating"):
-                images, labels = batch['image'].to(device), batch['label'].to(device)
+            for x,y in tqdm(val_loader, desc="Evaluating"):
+                images, labels = x.to(device), y.to(device)
                 out = net(images)
                 loss = criterion(out, labels)
                 losses += loss.detach()
@@ -187,60 +119,238 @@ def train(logs_root,learning_rate,weight_decay,num_classes,num_epochs, img_heigh
             'loss': loss_val.item(),
         }, model_file)
 
-def evaluate(val_loader, checkpoint_path, device, img_height = 64, img_width = 64):
-    """
-    Loads a model checkpoint and evaluates it on the validation dataset.
-    
-    Args:
-        val_loader (DataLoader): Validation data loader.
-        checkpoint_path (str): Path to the model checkpoint.
-        device (str): Device to run the evaluation on ('cuda' or 'cpu').
 
-    Returns:
-        dict: Dictionary containing validation loss, top-1 accuracy, top-5 accuracy, and F1 score.
-    """
+def train_caltech256(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
+    train_loader, val_loader = load_caltech256()
     set_seed(1234)
-    model = ConvFormer(num_classes=200, img_height = img_height, img_width = img_width).to(device)
-    checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model'])
+    os.makedirs(logs_root, exist_ok=True)
+    model_path = os.path.join(logs_root, 'models')
+    os.makedirs(model_path, exist_ok=True)
+
+    logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
+    if model == "MiT":
+        net = MiT(model_name="B1", num_classes= num_classes)
+    elif model == "ConvMiT":
+        net = ConvMiT(model_name="B1", num_classes= num_classes)
+    elif model == "ConvNextFormer":
+        net = ConvNextFormer(num_classes, img_height=224, img_width=224)
+    elif model == "ConvFormer":
+        net = ConvFormer(num_classes)
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    epoch_begin = 0
+    model_files = sorted(os.listdir(model_path))
+    net = net.to(device)
+    optimizer = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=wd)
     
+    if len(model_files):
+        checkpoint_path = os.path.join(model_path, model_files[-1])
+        print('Load Checkpoint -> ', checkpoint_path)
+        checkpoint = torch.load(checkpoint_path)
+        net.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        epoch_begin = checkpoint['epoch']
+
+    # Loss function with label smoothing
     criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
+    num_params = sum(p.numel() for p in net.parameters())
+
+    logger.info(f'Number of parameters: {num_params}')
+    print(f'Starting epoch: {epoch_begin}')
+    print(f'Total epochs: {num_epochs}')
+    logger.info('| %12s | %12s | %12s | %12s | %12s |' %
+                ('epoch', 'time_train', 'loss_train', 'loss_val', 'accuracy'))
     
-    model.eval()
-    losses = 0
-    correct_top1 = 0
-    correct_top5 = 0
-    total = 0
-    f1_metric = MulticlassF1Score(num_classes=200, average='macro').to(device)
-    f1_metric.reset()
+    for epoch in range(epoch_begin, num_epochs):
+        t0 = time.time()
+        net.train()
+        losses = 0
+
+        for x, y in tqdm(train_loader):
+            x = x.to(device)
+            y = y.to(device)
+
+            optimizer.zero_grad(set_to_none=True)
+
+            # # Apply Mixup or CutMix with 50% probability each
+            # if np.random.rand() < 0.5:
+            #     x, y_a, y_b, lam = mixup_data(x, y, alpha=1.0)
+            #     out = net(x)
+            #     loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
+            # else:
+            #     x, y_a, y_b, lam = cutmix_data(x, y, alpha=1.0)
+            #     out = net(x)
+            #     loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
+            out = net(x)
+            loss = criterion(out,y)
+
+            loss.backward()
+            optimizer.step()
+
+            losses += loss.detach()
+
+        loss_train = losses / len(train_loader)
+        t1 = time.time()
+        time_train = t1 - t0
+
+        # Validation Phase
+        t0 = time.time()
+        net.eval()
+        losses = 0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for x, y in tqdm(val_loader):
+                x = x.to(device)
+                y = y.to(device)
+
+                out = net(x)
+                loss = criterion(out, y)
+
+                losses += loss.detach()
+                
+                preds = out.argmax(dim=1)
+                
+                # Count correct predictions
+                correct += (preds == y).sum().item()
+                total += y.size(0)
+
+        # Compute final accuracy
+        accuracy = correct / total * 100  # Percentage
+        loss_val = losses / len(val_loader)
+        t1 = time.time()
+        time_val = t1 - t0
+
+        time_total = time_train + time_val
+        logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f' %
+                    (epoch + 1, time_total, loss_train, loss_val, accuracy))
+
+        model_file = os.path.join(model_path, 'model_%03d.pt' % (epoch + 1))
+        torch.save({
+            'epoch': epoch + 1,
+            'model': net.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'loss': loss_val.item(),
+        }, model_file)    
+
+def train_caltech101(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
+    train_loader, val_loader = load_caltech101()
+    set_seed(1234)
+    os.makedirs(logs_root, exist_ok=True)
+    model_path = os.path.join(logs_root, 'models')
+    os.makedirs(model_path, exist_ok=True)
+
+    logger = make_logger(filename=os.path.join(logs_root, f'train_{model}.log'))
+    if model == "MiT":
+        net = MiT(model_name="B2", num_classes= num_classes)
+    elif model == "ConvMiT":
+        net = ConvMiT(model_name="B1", num_classes= num_classes)
+    elif model == "ConvNextFormer":
+        net = ConvNextFormer(num_classes, img_height=224, img_width=224)
+    elif model == "ConvFormer":
+        net = ConvFormer(num_classes)
+    elif model == "ConvNeXt":
+        net = ConvNeXt(depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], num_classes=num_classes, in_chans=3)
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    epoch_begin = 0
+    model_files = sorted(os.listdir(model_path))
+    net = net.to(device)
+    optimizer = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=wd)
     
-    with torch.no_grad():
-        for batch in tqdm(val_loader, desc='Evaluating'):
-            images, labels = batch['image'].to(device), batch['label'].to(device)
+    if len(model_files):
+        checkpoint_path = os.path.join(model_path, model_files[-1])
+        print('Load Checkpoint -> ', checkpoint_path)
+        checkpoint = torch.load(checkpoint_path)
+        net.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        epoch_begin = checkpoint['epoch']
 
-            out = model(images)
-            loss = criterion(out, labels)
-            losses += loss.item()
+    # Loss function with label smoothing
+    criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
+    num_params = sum(p.numel() for p in net.parameters())
 
-            preds = out.argmax(dim=1)
-            f1_metric.update(preds, labels)
-
-            correct_top1 += (preds == labels).sum().item()
-            top5_preds = torch.topk(out, 5, dim=1).indices
-            correct_top5 += top5_preds.eq(labels.view(-1, 1)).sum().item()
-            total += labels.size(0)
+    logger.info(f'Number of parameters: {num_params}')
+    print(f'Starting epoch: {epoch_begin}')
+    print(f'Total epochs: {num_epochs}')
+    logger.info('| %12s | %12s | %12s | %12s | %12s |' %
+                ('epoch', 'time_train', 'loss_train', 'loss_val', 'accuracy'))
     
-    return {
-        "loss": losses / len(val_loader),
-        "top1_accuracy": correct_top1 / total * 100,
-        "top5_accuracy": correct_top5 / total * 100,
-        "f1_score": f1_metric.compute().item()
-    }
+    for epoch in range(epoch_begin, num_epochs):
+        t0 = time.time()
+        net.train()
+        losses = 0
 
+        for x, y in tqdm(train_loader):
+            x = x.to(device)
+            y = y.to(device)
+
+            optimizer.zero_grad(set_to_none=True)
+
+            # Apply Mixup or CutMix with 50% probability each
+            if np.random.rand() < 0.5:
+                x, y_a, y_b, lam = mixup_data(x, y, alpha=1.0)
+                out = net(x)
+                loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
+            else:
+                x, y_a, y_b, lam = cutmix_data(x, y, alpha=1.0)
+                out = net(x)
+                loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
+            # out = net(x)
+            # loss = criterion(out,y)
+
+            loss.backward()
+            optimizer.step()
+
+            losses += loss.detach()
+
+        loss_train = losses / len(train_loader)
+        t1 = time.time()
+        time_train = t1 - t0
+
+        # Validation Phase
+        t0 = time.time()
+        net.eval()
+        losses = 0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for x, y in tqdm(val_loader):
+                x = x.to(device)
+                y = y.to(device)
+
+                out = net(x)
+                loss = criterion(out, y)
+
+                losses += loss.detach()
+                
+                preds = out.argmax(dim=1)
+                
+                # Count correct predictions
+                correct += (preds == y).sum().item()
+                total += y.size(0)
+
+        # Compute final accuracy
+        accuracy = correct / total * 100  # Percentage
+        loss_val = losses / len(val_loader)
+        t1 = time.time()
+        time_val = t1 - t0
+
+        time_total = time_train + time_val
+        logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f' %
+                    (epoch + 1, time_total, loss_train, loss_val, accuracy))
+
+        model_file = os.path.join(model_path, 'model_%03d.pt' % (epoch + 1))
+        torch.save({
+            'epoch': epoch + 1,
+            'model': net.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'loss': loss_val.item(),
+        }, model_file)    
 
 
 if __name__ == '__main__':
-    train('./logs/tinyImageNet/ConvFormerV1',learning_rate=1e-4,weight_decay=0.05,num_classes=200,num_epochs=100, img_height = 64, img_width = 64)
-
-
+    # train('./logs/tinyImageNet/ConvNextFormer',learning_rate=1.5e-4,weight_decay=0.05,num_classes=200,num_epochs=100, batch_size=512)
+    # train_caltech101('./logs/caltech/MiT224',1.5e-4,0.05,101,150,model = "MiT")
+    train_caltech101('./logs/caltech/ConvFormer3rdStage4H_ConcatHeadLR1e-5',1e-4,0.05,101,125,model = "ConvFormer")
 

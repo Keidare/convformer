@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from drop import DropPath
-from convmitdecoder import SegFormerClassifier
+
 
 
 class Attention(nn.Module):
@@ -98,7 +98,41 @@ mit_settings = {
     'B4': [[64, 128, 320, 512], [3, 8, 27, 3]],
     'B5': [[64, 128, 320, 512], [3, 6, 40, 3]]
 }
+class SegFormerClassifier(nn.Module):
+    def __init__(self, embed_dims, num_classes):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)  # Global Average Pooling
+        self.norms = nn.ModuleList([nn.LayerNorm(dim) for dim in embed_dims])  # LayerNorm per stage
+        self.fc = nn.Linear(sum(embed_dims), num_classes)  # Fully Connected Layer
 
+    def forward(self, features):
+        x1, x2, x3, x4 = features  # Multi-scale features
+
+        # Reshape to (B, N, C) before LayerNorm
+        x1 = self.norms[0](x1.flatten(2).transpose(1, 2))  # (B, N, C)
+        x2 = self.norms[1](x2.flatten(2).transpose(1, 2))  # (B, N, C)
+        x3 = self.norms[2](x3.flatten(2).transpose(1, 2))  # (B, N, C)
+        x4 = self.norms[3](x4.flatten(2).transpose(1, 2))  # (B, N, C)
+
+        # Reshape back to (B, C, H, W) before pooling
+        B, N1, C1 = x1.shape
+        x1 = self.pool(x1.transpose(1, 2).reshape(B, C1, int(N1**0.5), int(N1**0.5))).flatten(1)
+
+        B, N2, C2 = x2.shape
+        x2 = self.pool(x2.transpose(1, 2).reshape(B, C2, int(N2**0.5), int(N2**0.5))).flatten(1)
+
+        B, N3, C3 = x3.shape
+        x3 = self.pool(x3.transpose(1, 2).reshape(B, C3, int(N3**0.5), int(N3**0.5))).flatten(1)
+
+        B, N4, C4 = x4.shape
+        x4 = self.pool(x4.transpose(1, 2).reshape(B, C4, int(N4**0.5), int(N4**0.5))).flatten(1)
+
+        # Concatenate all scales
+        x = torch.cat([x1, x2, x3, x4], dim=1)
+
+        # Classification
+        logits = self.fc(x)
+        return logits  # Shape: [B, num_classes]
 
 class MiT(nn.Module):
     def __init__(self, model_name: str = 'B0', num_classes = 1000):
@@ -132,7 +166,6 @@ class MiT(nn.Module):
         self.block4 = nn.ModuleList([Block(embed_dims[3], 8, 1, dpr[cur+i]) for i in range(depths[3])])
         self.norm4 = nn.LayerNorm(embed_dims[3])
 
-        self.classification_head = nn.Linear(embed_dims[3], num_classes) if num_classes > 0 else nn.Identity()
     def forward(self, x: Tensor) -> Tensor:
         B = x.shape[0]
 
@@ -140,7 +173,8 @@ class MiT(nn.Module):
         x, H, W = self.patch_embed1(x)
         for blk in self.block1:
             x = blk(x, H, W)
-        x1 = self.norm1(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)  # (B, C, H, W)
+        x1 = self.norm1(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)
+
 
         # Stage 2
         x, H, W = self.patch_embed2(x1)
@@ -148,20 +182,20 @@ class MiT(nn.Module):
             x = blk(x, H, W)
         x2 = self.norm2(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)
 
+
         # Stage 3
         x, H, W = self.patch_embed3(x2)
         for blk in self.block3:
             x = blk(x, H, W)
         x3 = self.norm3(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)
 
+
         # Stage 4
         x, H, W = self.patch_embed4(x3)
         for blk in self.block4:
             x = blk(x, H, W)
         x4 = self.norm4(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)
-                # Global Average Pooling for Classification
-        x_cls = x4.mean(dim=[2, 3])  # GAP (B, C)
-        logits = self.classification_head(x_cls)  # (B, num_classes)
-        return logits
+
+        return x1, x2, x3, x4
 
 

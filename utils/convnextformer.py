@@ -8,8 +8,8 @@ class ConvNextFormer(nn.Module):
     def __init__(
             self,
             num_classes = 101,
-            depths = [2,2,19,2],
-            dims = [128, 256, 512, 1024],
+            depths = [2,2,8,2],
+            dims = [64, 128, 320, 512],
             layer_scale_init_value = 0,
             head_init_scale = 1.,
             drop_path_rate = 0.,
@@ -20,14 +20,14 @@ class ConvNextFormer(nn.Module):
         self.stages = nn.ModuleList()
         self.downsample_layers = nn.ModuleList() # stem and 3 intermediate downsampling conv layers
         stem = nn.Sequential(
-            nn.Conv2d(3, dims[0], kernel_size=4, stride=4),
+            nn.Conv2d(3, dims[0], kernel_size=7, stride=3),
             LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
         )
         self.downsample_layers.append(stem)
         for i in range(3):
             downsample_layer = nn.Sequential(
                     LayerNorm(dims[i], eps=1e-6, data_format="channels_first"),
-                    nn.Conv2d(dims[i], dims[i+1], kernel_size=2, stride=2),
+                    nn.Conv2d(dims[i], dims[i+1], kernel_size=3, stride=2),
             )
             self.downsample_layers.append(downsample_layer)
         self.stages = nn.ModuleList()
@@ -43,14 +43,14 @@ class ConvNextFormer(nn.Module):
 
         # Third stage: 9 ConvBlocks, 3 AttnBlocks, 1 ConvBlock
         stage = nn.Sequential(
-            *[Block(dim=dims[2], drop_path=dp_rates[cur + j], layer_scale_init_value=layer_scale_init_value) for j in range(9)],
-            AttnBlock(dim=dims[2], sr_ratio=2, head=4, dpr=dp_rates[cur + 10], img_height= img_height, img_width= img_width),
-            AttnBlock(dim=dims[2], sr_ratio=2, head=4, dpr=dp_rates[cur + 13], img_height= img_height, img_width= img_width),
-            AttnBlock(dim=dims[2], sr_ratio=2, head=4, dpr=dp_rates[cur + 16], img_height= img_height, img_width= img_width),
-            Block(dim=dims[2], drop_path=dp_rates[cur + 18], layer_scale_init_value=layer_scale_init_value)
+            *[Block(dim=dims[2], drop_path=dp_rates[cur + j], layer_scale_init_value=layer_scale_init_value) for j in range(4)],
+            AttnBlock(dim=dims[2], sr_ratio=2, head=1, dpr=dp_rates[cur + 4], img_height= img_height, img_width= img_width),
+            AttnBlock(dim=dims[2], sr_ratio=2, head=2, dpr=dp_rates[cur + 5], img_height= img_height, img_width= img_width),
+            AttnBlock(dim=dims[2], sr_ratio=2, head=4, dpr=dp_rates[cur + 6], img_height= img_height, img_width= img_width),
+            Block(dim=dims[2], drop_path=dp_rates[cur + 7], layer_scale_init_value=layer_scale_init_value)
         )
         self.stages.append(stage)
-        cur += 19
+        cur += 8
 
         # Last stage: 2 AttnBlocks
         stage = nn.Sequential(
@@ -104,3 +104,8 @@ class ConvNextFormer(nn.Module):
 
         return out
     
+# model = ConvNextFormer()
+# inp = torch.randn(1,3,64,64)
+# x = model(inp).to('cuda')
+
+# print(x.shape)

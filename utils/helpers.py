@@ -367,11 +367,11 @@ class BN_Linear(torch.nn.Sequential):
 
 
 class Downsample(nn.Module):
-    def __init__(self, in_dim, out_dim):
+    def __init__(self, in_dim, out_dim, kernel=3):
         super().__init__()
         self.downsample = nn.Sequential(
             LayerNorm(in_dim, eps=1e-6, data_format="channels_first"),  # Channel-first LayerNorm
-            nn.Conv2d(in_dim, out_dim, kernel_size=2, stride=2)  # 2x2 strided convolution
+            nn.Conv2d(in_dim, out_dim, kernel_size=kernel, stride=2)  # 2x2 strided convolution
         )
 
     def forward(self, x):
