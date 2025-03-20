@@ -6,13 +6,14 @@ import random, os, logging
 import numpy as np
 from convmit import ConvMiT
 from mit import MiT
-from convformer import ConvFormer
+from convformer import ConvFormer, ConvFormerBN
 from convnextformer import ConvNextFormer
 import torchvision
 from torchmetrics.classification import MulticlassF1Score
 from torch.utils.data import DataLoader
 from convnext import ConvNeXt
-from caltech import set_seed, make_logger, cutmix_data, mixup_data, load_caltech256, load_caltech101
+from helpers import *
+from caltech import load_caltech256, load_caltech101
 
 
 
@@ -251,6 +252,8 @@ def train_caltech101(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
         net = ConvFormer(num_classes)
     elif model == "ConvNeXt":
         net = ConvNeXt(depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], num_classes=num_classes, in_chans=3)
+    elif model == "ConvFormerBN":
+        net = ConvFormerBN(num_classes)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     epoch_begin = 0
@@ -352,5 +355,5 @@ def train_caltech101(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
 if __name__ == '__main__':
     # train('./logs/tinyImageNet/ConvNextFormer',learning_rate=1.5e-4,weight_decay=0.05,num_classes=200,num_epochs=100, batch_size=512)
     # train_caltech101('./logs/caltech/MiT224',1.5e-4,0.05,101,150,model = "MiT")
-    train_caltech101('./logs/caltech/ConvFormer3rdStage4H_ConcatHeadLR1e-5',1e-4,0.05,101,125,model = "ConvFormer")
+    train_caltech101('./logs/caltech/ConvFormerModification1',1e-4,0.05,101,125,model = "ConvFormer")
 

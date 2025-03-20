@@ -4,7 +4,6 @@ import os
 DATA_DIR = './data/tiny-imagenet-200/'
 
 train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(64),
     transforms.RandomHorizontalFlip(p=0.5),
     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
     transforms.ToTensor(),
