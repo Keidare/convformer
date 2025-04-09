@@ -141,9 +141,10 @@ class MiT(nn.Module):
         embed_dims, depths = mit_settings[model_name]
         drop_path_rate = 0.1
         self.channels = embed_dims
+        self.head = SegFormerClassifier(embed_dims, num_classes)
 
         # patch_embed
-        self.patch_embed1 = PatchEmbed(3, embed_dims[0], 7, 4)
+        self.patch_embed1 = PatchEmbed(1, embed_dims[0], 7, 4)
         self.patch_embed2 = PatchEmbed(embed_dims[0], embed_dims[1], 3, 2)
         self.patch_embed3 = PatchEmbed(embed_dims[1], embed_dims[2], 3, 2)
         self.patch_embed4 = PatchEmbed(embed_dims[2], embed_dims[3], 3, 2)
@@ -196,6 +197,7 @@ class MiT(nn.Module):
             x = blk(x, H, W)
         x4 = self.norm4(x).reshape(B, H, W, -1).permute(0, 3, 1, 2)
 
-        return x1, x2, x3, x4
+        return self.head([x1, x2, x3, x4])
+
 
 

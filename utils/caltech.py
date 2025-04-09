@@ -1,81 +1,35 @@
 import torch
-import time,os,logging,random
-from tqdm import tqdm
-from torchvision import datasets
+import torchvision.models as models
 import torchvision.transforms as transforms
+import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, random_split
-from mit import MiT
-from convmit import ConvMiT
-from convnextformer import ConvNextFormer
 from sklearn.preprocessing import LabelEncoder
-import numpy as np
-from convformer import ConvFormer
+import os
+import time
+import psutil
+import GPUtil
+import logging
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from tqdm import tqdm
 
 
+def get_efficientnet_b0(pretrained=True):
+    """Returns an EfficientNet-B0 model with optional ImageNet pretrained weights."""
+    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None)
+    return model
 
-
-# Load Caltech 101 dataset
-# dataset = datasets.Caltech101(root="./data", transform=train_transform, download=True)
-# print(f"Number of classes: {len(dataset.categories)}")
-# # Encode labels
-# label_encoder = LabelEncoder()
-# dataset.y = label_encoder.fit_transform(dataset.y) 
-
-# train_size = int(0.8 * len(dataset))
-# val_size = len(dataset) - train_size
-# train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-
-# val_dataset.dataset.transform = val_transform  # Overwrite transform for validation
-
-# # Create DataLoaders
-# train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-# val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
+def get_vit_base_16(pretrained=True):
+    """Returns a ViT-Base/16 model with optional ImageNet pretrained weights."""
+    model = models.vit_b_16(weights=models.ViT_B_16_Weights.IMAGENET1K_V1 if pretrained else None)
+    return model
 
 def load_caltech101():
-    # Define transformations
     train_transform = transforms.Compose([
         transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.Resize((128, 128)),  # Resize images
+        transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(),
-    ])
-
-    val_transform = transforms.Compose([
-        transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.Resize((128, 128)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    ds = datasets.Caltech101(root = './data', transform=train_transform, download=True)
-    print(f"Number of classes: {len(ds.categories)}")
-    # Encode labels
-    label_encoder = LabelEncoder()
-    ds.y = label_encoder.fit_transform(ds.y) 
-
-    train_size = int(0.8 * len(ds))
-    val_size = len(ds) - train_size
-    train_dataset, val_dataset = random_split(ds, [train_size, val_size])
-
-    val_dataset.dataset.transform = val_transform  # Overwrite transform for validation
-
-    # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
-    return train_loader, val_loader
-
-def load_caltech256():
-    # Define transformations
-    train_transform = transforms.Compose([
-        transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.Resize((224, 224)),  # Resize images
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(),
     ])
 
     val_transform = transforms.Compose([
@@ -84,33 +38,25 @@ def load_caltech256():
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
-    ds = datasets.Caltech256(root = './data', transform=train_transform, download=True)
-    print(f"Number of classes: {len(ds.categories)}")
-    # Encode labels
-    label_encoder = LabelEncoder()
-    ds.y = label_encoder.fit_transform(ds.y) 
 
+    ds = datasets.Caltech101(root='./data', transform=train_transform, download=True)
     train_size = int(0.8 * len(ds))
     val_size = len(ds) - train_size
     train_dataset, val_dataset = random_split(ds, [train_size, val_size])
+    val_dataset.dataset.transform = val_transform
 
-    val_dataset.dataset.transform = val_transform  # Overwrite transform for validation
-
-    # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     return train_loader, val_loader
 
-
-def set_seed(seed):
-    random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-
+def monitor_resources():
+    """Monitor CPU, RAM, and GPU usage."""
+    cpu_usage = psutil.cpu_percent()
+    ram_usage = psutil.virtual_memory().percent
+    gpus = GPUtil.getGPUs()
+    gpu_usage = gpus[0].load * 100 if gpus else 0
+    gpu_memory = gpus[0].memoryUsed if gpus else 0
+    return cpu_usage, ram_usage, gpu_usage, gpu_memory
 
 def make_logger(name = None, filename='test.log'):
     """
@@ -140,381 +86,75 @@ def make_logger(name = None, filename='test.log'):
 
     return logger
 
-def mixup_data(x, y, alpha=1.0):
-    """Apply Mixup augmentation"""
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-
-    batch_size = x.size(0)
-    index = torch.randperm(batch_size).to(x.device)
-
-    mixed_x = lam * x + (1 - lam) * x[index, :]
-    y_a, y_b = y, y[index]
-    
-    return mixed_x, y_a, y_b, lam
-
-def cutmix_data(x, y, alpha=1.0):
-    """Apply CutMix augmentation"""
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-
-    batch_size, _, H, W = x.size()
-    index = torch.randperm(batch_size).to(x.device)
-
-    # Generate random bounding box
-    rx, ry = np.random.randint(W), np.random.randint(H)
-    rw, rh = int(W * np.sqrt(1 - lam)), int(H * np.sqrt(1 - lam))
-    
-    # Ensure valid coordinates
-    x1, y1 = max(rx - rw // 2, 0), max(ry - rh // 2, 0)
-    x2, y2 = min(rx + rw // 2, W), min(ry + rh // 2, H)
-
-    x[:, :, y1:y2, x1:x2] = x[index, :, y1:y2, x1:x2]
-    y_a, y_b = y, y[index]
-
-    # Adjust lambda based on actual patch area
-    lam = 1 - ((x2 - x1) * (y2 - y1) / (H * W))
-    
-    return x, y_a, y_b, lam
-
-# def train(logs_root):
-#     set_seed(1234)
-#     os.makedirs(logs_root, exist_ok=True)
-#     model_path = os.path.join(logs_root, 'models')
-#     os.makedirs(model_path, exist_ok=True)
-
-#     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-#     net = ConvNextFormer(num_classes=101, img_height=128, img_width=128)
-#     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-#     epoch_begin = 0
-#     model_files = sorted(os.listdir(model_path))
-#     net = net.to(device)
-#     optimizer = torch.optim.AdamW(net.parameters(), lr=1e-3, weight_decay=0.05)
-    
-#     if len(model_files):
-#         checkpoint_path = os.path.join(model_path, model_files[-1])
-#         print('Load Checkpoint -> ', checkpoint_path)
-#         checkpoint = torch.load(checkpoint_path)
-#         net.load_state_dict(checkpoint['model'])
-#         optimizer.load_state_dict(checkpoint['optimizer'])
-#         epoch_begin = checkpoint['epoch']
-
-#     # Loss function with label smoothing
-#     criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
-#     num_epochs = 150
-
-#     num_params = sum(p.numel() for p in net.parameters())
-
-#     logger.info(f'Number of parameters: {num_params}')
-#     logger.info(net)
-#     print(f'Starting epoch: {epoch_begin}')
-#     print(f'Total epochs: {num_epochs}')
-#     logger.info('| %12s | %12s | %12s | %12s | %12s |' %
-#                 ('epoch', 'time_train', 'loss_train', 'loss_val', 'accuracy'))
-    
-#     for epoch in range(epoch_begin, num_epochs):
-#         t0 = time.time()
-#         net.train()
-#         losses = 0
-
-#         for x, y in tqdm(train_loader):
-#             x = x.to(device)
-#             y = y.to(device)
-
-#             optimizer.zero_grad(set_to_none=True)
-
-#             # Apply Mixup or CutMix with 50% probability each
-#             if np.random.rand() < 0.5:
-#                 x, y_a, y_b, lam = mixup_data(x, y, alpha=1.0)
-#                 out = net(x)
-#                 loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
-#             else:
-#                 x, y_a, y_b, lam = cutmix_data(x, y, alpha=1.0)
-#                 out = net(x)
-#                 loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
-
-#             loss.backward()
-#             optimizer.step()
-
-#             losses += loss.detach()
-
-#         loss_train = losses / len(train_loader)
-#         t1 = time.time()
-#         time_train = t1 - t0
-
-#         # Validation Phase
-#         t0 = time.time()
-#         net.eval()
-#         losses = 0
-#         correct = 0
-#         total = 0
-#         with torch.no_grad():
-#             for x, y in tqdm(val_loader):
-#                 x = x.to(device)
-#                 y = y.to(device)
-
-#                 out = net(x)
-#                 loss = criterion(out, y)
-
-#                 losses += loss.detach()
-                
-#                 preds = out.argmax(dim=1)
-                
-#                 # Count correct predictions
-#                 correct += (preds == y).sum().item()
-#                 total += y.size(0)
-
-#         # Compute final accuracy
-#         accuracy = correct / total * 100  # Percentage
-#         loss_val = losses / len(val_loader)
-#         t1 = time.time()
-#         time_val = t1 - t0
-
-#         time_total = time_train + time_val
-#         logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f' %
-#                     (epoch + 1, time_total, loss_train, loss_val, accuracy))
-
-#         model_file = os.path.join(model_path, 'model_%03d.pt' % (epoch + 1))
-#         torch.save({
-#             'epoch': epoch + 1,
-#             'model': net.state_dict(),
-#             'optimizer': optimizer.state_dict(),
-#             'loss': loss_val.item(),
-#         }, model_file)
-
-# def eval():
-#     net = ConvFormer(num_classes=101)
-#     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-#     net.to(device)
-#     checkpoint = torch.load('./logs/caltech/06032025ConvFormerv224x224/models/model_101.pt')
-#     net.load_state_dict(checkpoint['model'])
-#     criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
-#     losses = 0
-#     correct = 0
-#     total = 0
-#     with torch.no_grad():
-#         for x, y in tqdm(val_loader):
-#             x = x.to(device)
-#             y = y.to(device)
-
-#             out = net(x)
-#             loss = criterion(out, y)
-
-#             losses += loss.detach()
-
-#             # Get predicted class (assuming classification task)
-#             preds = out.argmax(dim=1)
-            
-#             # Count correct predictions
-#             correct += (preds == y).sum().item()
-#             total += y.size(0)
-
-#     # Compute final accuracy
-#     accuracy = correct / total * 100  # Percentage
-#     loss_val = losses / len(val_loader)
-
-#     print(loss_val, accuracy)
-
-# def trainconvmit(logs_root):
-#     set_seed(1234)
-#     os.makedirs(logs_root, exist_ok=True)
-#     model_path = os.path.join(logs_root, 'models')
-#     os.makedirs(model_path, exist_ok=True)
-
-#     logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-#     net = ConvMiT(num_classes=101,model_name="B1")
-#     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-#     print(device)
-#     epoch_begin = 0
-#     model_files = sorted(os.listdir(model_path))
-#     net = net.to(device)
-#     optimizer = torch.optim.AdamW(net.parameters(), lr=1.5e-4, weight_decay=0.05)
-    
-#     if len(model_files):
-#         checkpoint_path = os.path.join(model_path, model_files[-1])
-#         print('Load Checkpoint -> ', checkpoint_path)
-#         checkpoint = torch.load(checkpoint_path)
-#         net.load_state_dict(checkpoint['model'])
-#         optimizer.load_state_dict(checkpoint['optimizer'])
-#         epoch_begin = checkpoint['epoch']
-
-#     # Loss function with label smoothing
-#     criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
-#     num_epochs = 50
-
-#     num_params = sum(p.numel() for p in net.parameters())
-
-#     logger.info(f'Number of parameters: {num_params}')
-#     print(f'Starting epoch: {epoch_begin}')
-#     print(f'Total epochs: {num_epochs}')
-#     logger.info('| %12s | %12s | %12s | %12s | %12s |' %
-#                 ('epoch', 'time_train', 'loss_train', 'loss_val', 'accuracy'))
-    
-#     for epoch in range(epoch_begin, num_epochs):
-#         t0 = time.time()
-#         net.train()
-#         losses = 0
-
-#         for x, y in tqdm(train_loader):
-#             x = x.to(device)
-#             y = y.to(device)
-
-#             optimizer.zero_grad(set_to_none=True)
-
-#             # Apply Mixup or CutMix with 50% probability each
-#             if np.random.rand() < 0.5:
-#                 x, y_a, y_b, lam = mixup_data(x, y, alpha=1.0)
-#                 out = net(x)
-#                 loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
-#             else:
-#                 x, y_a, y_b, lam = cutmix_data(x, y, alpha=1.0)
-#                 out = net(x)
-#                 loss = lam * criterion(out, y_a) + (1 - lam) * criterion(out, y_b)
-
-#             loss.backward()
-#             optimizer.step()
-
-#             losses += loss.detach()
-
-#         loss_train = losses / len(train_loader)
-#         t1 = time.time()
-#         time_train = t1 - t0
-
-#         # Validation Phase
-#         t0 = time.time()
-#         net.eval()
-#         losses = 0
-#         correct = 0
-#         total = 0
-#         with torch.no_grad():
-#             for x, y in tqdm(val_loader):
-#                 x = x.to(device)
-#                 y = y.to(device)
-
-#                 out = net(x)
-#                 loss = criterion(out, y)
-
-#                 losses += loss.detach()
-                
-#                 preds = out.argmax(dim=1)
-                
-#                 # Count correct predictions
-#                 correct += (preds == y).sum().item()
-#                 total += y.size(0)
-
-#         # Compute final accuracy
-#         accuracy = correct / total * 100  # Percentage
-#         loss_val = losses / len(val_loader)
-#         t1 = time.time()
-#         time_val = t1 - t0
-
-#         time_total = time_train + time_val
-#         logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f' %
-#                     (epoch + 1, time_total, loss_train, loss_val, accuracy))
-
-#         model_file = os.path.join(model_path, 'model_%03d.pt' % (epoch + 1))
-#         torch.save({
-#             'epoch': epoch + 1,
-#             'model': net.state_dict(),
-#             'optimizer': optimizer.state_dict(),
-#             'loss': loss_val.item(),
-#         }, model_file)
-
-
-# def trainMIT(logs_root):
-    set_seed(1234)
+def train(logs_root, model, num_classes=101, num_epochs=10, lr=0.001, wd=1e-4, model_name="EfficientNetB0"):
+    train_loader, val_loader = load_caltech101()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    criterion = torch.nn.CrossEntropyLoss()
     os.makedirs(logs_root, exist_ok=True)
     model_path = os.path.join(logs_root, 'models')
     os.makedirs(model_path, exist_ok=True)
+    logger = make_logger(filename=os.path.join(logs_root, f'train_{model_name}.log'))
 
-    logger = make_logger(filename=os.path.join(logs_root, 'train.log'))
-    net = MiT(num_classes=101,model_name="B1")
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    epoch_begin = 0
-    model_files = sorted(os.listdir(model_path))
-    net = net.to(device)
-    optimizer = torch.optim.AdamW(net.parameters(), lr=1e-4, weight_decay=0.05)
-    if len(model_files):
-        checkpoint_path = os.path.join(model_path, model_files[-1])
-        print('Load Checkpoint -> ', checkpoint_path)
-        checkpoint = torch.load(checkpoint_path)
-        net.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        epoch_begin = checkpoint['epoch']
-    criterion = torch.nn.CrossEntropyLoss()
-    num_epochs = 35
-
-    num_params = sum(p.numel() for p in net.parameters())
-
-    logger.info(f'Number of parameters: {num_params}')
-    logger.info(net)
-    print(f'Starting epoch: {epoch_begin}')
-    print(f'Total epochs: {num_epochs}')
-    logger.info('| %12s | %12s | %12s | %12s | %12s |' %
-                ('epoch', 'time_train', 'loss_train', 'loss_val', 'accuracy'))
-    
-    for epoch in range(epoch_begin,num_epochs):
-        t0 = time.time()
-        net.train()
-        losses = 0
-        for x, y in tqdm(train_loader):
-            x = x.to(device)
-            y = y.to(device)
-
-            optimizer.zero_grad(set_to_none=True)
-
-            out = net(x)
-            loss = criterion(out, y)
-
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} Training"):
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-
-            losses += loss.detach()
-
-        loss_train = losses / len(train_loader)
-        t1 = time.time()
-        time_train = t1 - t0
-
-        t0 = time.time()
-        net.eval()
-        losses = 0
-        correct = 0
-        total = 0
+            running_loss += loss.item()
+        
+        # Monitor resources
+        cpu, ram, gpu, gpu_mem = monitor_resources()
+        
+        # Evaluation phase
+        model.eval()
+        all_preds = []
+        all_labels = []
         with torch.no_grad():
-            for x, y in tqdm(val_loader):
-                x = x.to(device)
-                y = y.to(device)
+            for images, labels in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} Validation"):
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                _, preds = torch.max(outputs, 1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+        
+        # Compute metrics
+        accuracy = accuracy_score(all_labels, all_preds)
+        precision = precision_score(all_labels, all_preds, average='weighted', zero_division=1)
+        recall = recall_score(all_labels, all_preds, average='weighted', zero_division=1)
+        f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=1)
 
-                out = net(x)
-                loss = criterion(out, y)
+        log_message = (f"Epoch {epoch+1}/{num_epochs}, Loss: {running_loss/len(train_loader):.4f}, "
+                       f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, "
+                       f"F1: {f1:.4f}, "
+                       f"CPU: {cpu:.2f}%, RAM: {ram:.2f}%, GPU: {gpu:.2f}%, GPU Mem: {gpu_mem}MB")
+        print(log_message)
+        logger.info(log_message)
+    
+    # Save final model
+    final_model_path = os.path.join(model_path, f'{model_name}_final.pth')
+    torch.save({
+        'epoch': num_epochs,
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'loss': loss.item(),
+    }, final_model_path)
+    print(f"Final model saved at {final_model_path}")
+    logger.info(f"Final model saved at {final_model_path}")
 
-                losses += loss.detach()
-                
-                preds = out.argmax(dim=1)
-                
-                # Count correct predictions
-                correct += (preds == y).sum().item()
-                total += y.size(0)
 
-        # Compute final accuracy
-        accuracy = correct / total * 100  # Percentage
-        loss_val = losses / len(val_loader)
-        loss_val = losses / len(val_loader)
-        t1 = time.time()
-        time_val = t1 - t0
-
-        time_total = time_train + time_val
-        logger.info('| %12d | %12.4f | %12.4f | %12.4f | %12.4f' %
-                    (epoch + 1, time_total, loss_train, loss_val, accuracy))
-
-        model_file = os.path.join(model_path, 'model_%03d.pt' % (epoch + 1))
-        torch.save({
-            'epoch': epoch + 1,
-            'model': net.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'loss': loss_val.item(),
-        }, model_file)
+# Example usage
+model = get_efficientnet_b0(pretrained=True)
+train(model = model, num_epochs=20, logs_root="./logs/caltech/EfficientNetB0Pretrained", model_name = "EfficientNetB0Pretrained")
+model = get_efficientnet_b0(pretrained=False)
+train(model = model, num_epochs=20, logs_root="./logs/caltech/EfficientNetB0Scratch", model_name = "EfficientNetB0Scratch")
+model = get_vit_base_16(pretrained=True)
+train(model = model, num_epochs=20, logs_root="./logs/caltech/VitBase16Pretrained", model_name = "VitBase16Pretrained")
+model = get_vit_base_16(pretrained=False)
+train(model = model, num_epochs=20, logs_root="./logs/caltech/VitBase16Scratch", model_name = "VitBase16Scratch")
