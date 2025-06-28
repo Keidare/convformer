@@ -46,6 +46,42 @@ class TransformerBlock(nn.Module):
         return x
 
 class CNNTransformer(nn.Module):
+    def __init__(self, in_channels=1, num_classes=2, heads=4):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1) 
+        self.bn1 = nn.BatchNorm2d(32)
+        self.cbam1 = CBAM(32)
+        
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.cbam2 = CBAM(64)
+        
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.cbam3 = CBAM(128)
+        
+        self.flatten = nn.Conv2d(128, 256, kernel_size=1)  # Projection before transformer
+        self.transformer = TransformerBlock(dim=256, num_heads=heads)
+        
+        self.fc = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.cbam1(x)
+        
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = self.cbam2(x)
+        
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.cbam3(x)
+        
+        x = self.flatten(x).flatten(2).permute(0, 2, 1)  # Flatten for transformer
+        x = self.transformer(x).mean(dim=1)  # Global pooling
+        
+        return torch.sigmoid(self.fc(x))
+    
+
+class CNNTransformerGELU(nn.Module):
     def __init__(self, in_channels=1, num_classes=2):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1) 
@@ -66,13 +102,13 @@ class CNNTransformer(nn.Module):
         self.fc = nn.Linear(256, num_classes)
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.gelu(self.bn1(self.conv1(x)))
         x = self.cbam1(x)
         
-        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.gelu(self.bn2(self.conv2(x)))
         x = self.cbam2(x)
         
-        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.gelu(self.bn3(self.conv3(x)))
         x = self.cbam3(x)
         
         x = self.flatten(x).flatten(2).permute(0, 2, 1)  # Flatten for transformer
@@ -185,7 +221,89 @@ class CNNTransformerMultiCNNAndBlock(nn.Module):
         x = self.transformers(x).mean(dim=1)
         return torch.sigmoid(self.fc(x))
 
+class CNN_NoTransformer(nn.Module):
+    def __init__(self, in_channels=1, num_classes=2):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.cbam1 = CBAM(32)
 
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.cbam2 = CBAM(64)
+
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.cbam3 = CBAM(128)
+
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.cbam1(x)
+
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = self.cbam2(x)
+
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.cbam3(x)
+
+        x = self.pool(x).flatten(1)
+        return torch.sigmoid(self.fc(x))
+    
+class BaseModel(nn.Module):
+    def __init__(self, in_channels=1, num_classes=2):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.cbam1 = CBAM(32)
+
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.cbam2 = CBAM(64)
+
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.cbam3 = CBAM(128)
+
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+
+        x = self.pool(x).flatten(1)
+        return torch.sigmoid(self.fc(x))
+    
+class CNNTransformer_NoCBAM(nn.Module):
+    def __init__(self, in_channels=1, num_classes=2):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+
+        self.flatten = nn.Conv2d(128, 256, kernel_size=1)
+        self.transformer = TransformerBlock(dim=256, num_heads=4)
+
+        self.fc = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+
+        x = self.flatten(x).flatten(2).permute(0, 2, 1)
+        x = self.transformer(x).mean(dim=1)
+
+        return torch.sigmoid(self.fc(x))    
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
         super().__init__()
@@ -281,4 +399,94 @@ class CNNTransformerTransformer(nn.Module):
         
         x = x.mean(dim=1)  # Global pooling
         
+        return torch.sigmoid(self.fc(x))
+    
+
+class CNNTransformerPosEnc(nn.Module):
+    def __init__(self, in_channels=1, num_classes=2, img_size=256):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.cbam1 = CBAM(32)
+
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.cbam2 = CBAM(64)
+
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.cbam3 = CBAM(128)
+
+        self.flatten = nn.Conv2d(128, 256, kernel_size=1)  # Project to transformer dim
+
+        # Compute flattened size (img_size // 8)^2 because 3 conv layers with stride=2
+        num_patches = (img_size // 8) ** 2
+        self.pos_embed = nn.Parameter(torch.randn(1, num_patches, 256))
+
+        self.transformer = TransformerBlock(dim=256, num_heads=4)
+
+        self.fc = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.cbam1(x)
+
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = self.cbam2(x)
+
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.cbam3(x)
+
+        x = self.flatten(x).flatten(2).permute(0, 2, 1)  # (B, N, 256)
+
+        # Add positional encoding
+        x = x + self.pos_embed
+
+        x = self.transformer(x).mean(dim=1)  # Global pooling
+
+        return torch.sigmoid(self.fc(x))
+    
+
+class CNNTransformerRepCPE(nn.Module):
+    def __init__(self, in_channels=1, num_classes=2, img_size=256):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.cbam1 = CBAM(32)
+
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.cbam2 = CBAM(64)
+
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.cbam3 = CBAM(128)
+
+        self.flatten = nn.Conv2d(128, 256, kernel_size=1)  # Project to transformer dim
+
+        # RepCPE expects (B, C, H, W)
+        self.repcpe = RepCPE(dim=256, kernel=3)
+
+        self.transformer = TransformerBlock(dim=256, num_heads=4)
+
+        self.fc = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.cbam1(x)
+
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = self.cbam2(x)
+
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.cbam3(x)
+
+        x = self.flatten(x)  # (B, 256, H, W) where H=W=img_size//8
+
+        x = self.repcpe(x)   # Apply conditional positional encoding
+
+        x = x.flatten(2).permute(0, 2, 1)  # (B, N, 256)
+
+        x = self.transformer(x).mean(dim=1)  # Global pooling
+
         return torch.sigmoid(self.fc(x))

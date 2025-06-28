@@ -10,10 +10,15 @@ from convformer import *
 from bonemeta import *
 from effNetCBAM import *
 from MagbooCBAMTransformer import *
-
-
-def train(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
-    train_loader, val_loader = prepare_ds()
+import timm 
+from CMT import *
+from coatnet import *
+from vit_effnet import *
+def train(logs_root,lr,wd,num_classes,num_epochs,model = "MiT", ds_mode='normal', heads = 4):
+    if ds_mode == "origds":
+        train_loader, val_loader, test_loader = prepare_ds(batch_size=16, csv_file='data/ground_original.csv', root_dir='data/bones_original/', crop = True)
+    else:
+        train_loader, val_loader, test_loader = prepare_ds_base(batch_size=8)
     set_seed(1232)
     os.makedirs(logs_root, exist_ok=True)
     model_path = os.path.join(logs_root, 'models')
@@ -29,7 +34,7 @@ def train(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
     elif model == "ConvFormerV2":
         net = ConvFormerV2(num_classes)
     elif model == "MCNNCBAMTransformer":
-        net = CNNTransformer(num_classes= num_classes, in_channels=1)
+        net = CNNTransformer(num_classes= num_classes, in_channels=1, heads=heads)
     elif model == "EfficientNet_CBAMb0":
         net = EfficientNet_CBAM(num_classes=num_classes, variant="b0")
     elif model == "DSCCBAMTransformer":
@@ -38,6 +43,54 @@ def train(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
         net = CNNTransformerMultiBlock(num_classes= num_classes, in_channels=1, num_transformers=3)
     elif model == "MagbooCBAMTransformerAndBlock":
         net = CNNTransformerMultiCNNAndBlock(num_classes=num_classes, in_channels=1, num_transformers=1)
+    elif model == "MCNNCBAMTransformerPosEnc":
+        net = CNNTransformerPosEnc(num_classes=num_classes, in_channels=1)
+    elif model == "MCNNCBAMTransformerCPE":
+        net = CNNTransformerRepCPE(num_classes=num_classes, in_channels=1)
+    elif model == "CNNCBAM":
+        net = CNN_NoTransformer(num_classes=num_classes, in_channels=1)
+    elif model == "CNN_NoCBAM":
+        net = CNNTransformer_NoCBAM(num_classes=num_classes, in_channels=1)
+    elif model == "Base":
+        net = BaseModel(num_classes=num_classes, in_channels=1)
+    elif model == "GELU":
+        net = CNNTransformerGELU(num_classes=num_classes, in_channels=1)
+    elif model == "swin":
+        net = timm.create_model('swin_small_patch4_window7_224', pretrained=False)
+
+        # Modify input to accept 1 channel instead of 3
+        original_proj = net.patch_embed.proj
+        net.patch_embed.proj = nn.Conv2d(
+            in_channels=1,
+            out_channels=original_proj.out_channels,
+            kernel_size=original_proj.kernel_size,
+            stride=original_proj.stride,
+            padding=original_proj.padding,
+            bias=original_proj.bias is not None
+        )
+
+        # Initialize new conv layer weights
+        nn.init.kaiming_normal_(net.patch_embed.proj.weight, mode='fan_out', nonlinearity='relu')
+
+        # Modify classification head
+        net.head = nn.Linear(net.head.in_features, num_classes)
+                # Modify the forward method to include global average pooling
+        def swin_forward(self, x):
+            x = self.forward_features(x)  # Output shape: [B, H_patch, W_patch, C]
+            x = x.mean(dim=(1, 2))        # Global average pool over height and width (H, W)
+            x = self.head(x)              # Output shape: [B, num_classes]
+            return x
+
+        # Replace the forward method in the model
+        net.forward = swin_forward.__get__(net)
+    elif model == "CMT":
+        net = CMT_S()
+    elif model == "COAT":
+        net = coatnet_1()
+    elif model == "vit":
+        net = vit()
+    elif model == "effnet":
+        net = efficientnet()
     logging.getLogger('PIL').setLevel(logging.CRITICAL)  # This will suppress all Pillow logs
 
 
@@ -148,7 +201,17 @@ def train(logs_root,lr,wd,num_classes,num_epochs,model = "MiT"):
 if __name__ == "__main__":
     # train('./logs/BoneDataset/EFFNETCBAMB0',1e-5,0.2,2,300,model = "EfficientNet_CBAMb0")
     # train('./logs/BoneDataset/EFFNETCBAMB1',1e-5,0.2,2,300,model = "EfficientNet_CBAMb1")
-    train('./logs/BoneDataset/MagbooCBAM-1TransformerBlock',1e-5,0.02,2,900,model = "MCNNCBAMTransformer")
+    # train('./logs/BoneDataset/MagbooCBAM-1-CPE',1e-5,0.02,2,400,model = "MCNNCBAMTransformerCPE")
+    # train('./logs/BoneDataset/MagbooCBAM-1-PosEnc',1e-5,0.02,2,400,model = "MCNNCBAMTransformerPosEnc")
+    # train('./logs/BoneDatasetO/MiT',1e-5,0.02,2,150,model = "MiT", ds_mode='origds')
+    # train('./logs/BoneDatasetO/CoAt',1e-5,0.02,2,150,model = "COAT", ds_mode='origds')
+    # train('./logs/BoneDatasetO/CMT',1e-5,0.2,2,150,model = "CMT")
+    # train('./logs/BoneDatasetO/SWIN',1e-5,0.2,2,150,model = "swin")
+    # train('./logs/BoneDatasetO/ViT',1e-5,0.2,2,150,model = "vit", ds_mode='origds')
+    # train('./logs/BoneDatasetO/effnet',1e-5,0.2,2,150,model = "effnet", ds_mode='origds')
+    # train('./logs/BoneDataset/MNCNNCBAM-GELU1TBlock',1e-5,0.2,2,300,model = "GELU")
+    train('./logs/BoneDataset/FinalModel224',1e-5,0.15,2,600,model = "MCNNCBAMTransformer", heads = 4)
+    
 
 
 
