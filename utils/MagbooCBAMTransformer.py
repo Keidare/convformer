@@ -304,6 +304,7 @@ class CNNTransformer_NoCBAM(nn.Module):
         x = self.transformer(x).mean(dim=1)
 
         return torch.sigmoid(self.fc(x))    
+    
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
         super().__init__()

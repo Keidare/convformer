@@ -196,7 +196,104 @@ def train(logs_root,lr,wd,num_classes,num_epochs,model = "MiT", ds_mode='normal'
             'optimizer': optimizer.state_dict(),
             'loss': loss_val.item(),
         }, model_file)    
-    
+
+
+import torch
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
+import matplotlib.pyplot as plt
+import numpy as np
+
+def evaluate_model(model, test_loader, device='cuda'):
+    model.eval()
+    model.to(device)
+
+    all_preds = []
+    all_labels = []
+    all_images = []
+    all_filenames = []
+
+    with torch.no_grad():
+        for x, y, fnames in test_loader:
+            x = x.to(device)
+            y = y.to(device)
+
+            if y.ndim > 1:
+                y = y.argmax(dim=1)
+
+            out = model(x)
+            preds = out.argmax(dim=1)
+
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(y.cpu().numpy())
+            all_images.extend(x.cpu())
+            all_filenames.extend(fnames)
+
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+    images = torch.stack(all_images)
+
+    return images, all_preds, all_labels, all_filenames
+
+
+
+
+def show_predictions(images, preds, labels, num_images=8):
+    plt.figure(figsize=(15, 5))
+    for i in range(num_images):
+        img = images[i].squeeze(0)  # remove channel dim if grayscale
+        plt.subplot(1, num_images, i+1)
+        plt.imshow(img, cmap='gray')
+        plt.title(f"Pred: {preds[i]}, Label: {labels[i]}")
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+
+
+import numpy as np
+import textwrap
+
+def show_correct_and_wrong(images, preds, labels, filenames, correct_n=5, wrong_n=5):
+    class_names = {0: "Normal", 1: "Abnormal"}
+    correct = np.where(preds == labels)[0]
+    wrong = np.where(preds != labels)[0]
+
+    print(f"Found {len(correct)} correct and {len(wrong)} incorrect predictions")
+
+    selected_correct = np.random.choice(correct, min(correct_n, len(correct)), replace=False)
+    selected_wrong = np.random.choice(wrong, min(wrong_n, len(wrong)), replace=False)
+
+    fig, axs = plt.subplots(2, max(correct_n, wrong_n), figsize=(18, 6))
+
+    for i, idx in enumerate(selected_correct):
+        axs[0, i].imshow(images[idx].squeeze(), cmap='gray')
+
+        # Wrap filename at ~30 characters
+        wrapped_name = textwrap.fill(filenames[idx], width=30)
+
+        axs[0, i].set_title(
+            f"✓ {wrapped_name}\nPred: {class_names[preds[idx]]} | GT: {class_names[labels[idx]]}",
+            fontsize=10
+        )
+        axs[0, i].axis('off')
+
+    for i, idx in enumerate(selected_wrong):
+        axs[1, i].imshow(images[idx].squeeze(), cmap='gray')
+
+        wrapped_name = textwrap.fill(filenames[idx], width=30)
+
+        axs[1, i].set_title(
+            f"✗ {wrapped_name}\nPred: {class_names[preds[idx]]} | GT: {class_names[labels[idx]]}",
+            color='red', fontsize=10
+        )
+        axs[1, i].axis('off')
+
+    axs[0, 0].set_ylabel("Correct", fontsize=12)
+    axs[1, 0].set_ylabel("Wrong", fontsize=12)
+
+    plt.tight_layout()
+    plt.show()
+
+
 
 if __name__ == "__main__":
     # train('./logs/BoneDataset/EFFNETCBAMB0',1e-5,0.2,2,300,model = "EfficientNet_CBAMb0")
@@ -210,8 +307,22 @@ if __name__ == "__main__":
     # train('./logs/BoneDatasetO/ViT',1e-5,0.2,2,150,model = "vit", ds_mode='origds')
     # train('./logs/BoneDatasetO/effnet',1e-5,0.2,2,150,model = "effnet", ds_mode='origds')
     # train('./logs/BoneDataset/MNCNNCBAM-GELU1TBlock',1e-5,0.2,2,300,model = "GELU")
-    train('./logs/BoneDataset/FinalModel224',1e-5,0.15,2,600,model = "MCNNCBAMTransformer", heads = 4)
-    
+    # train('./logs/BoneDataset/FinalModel224',1e-5,0.15,2,600,model = "MCNNCBAMTransformer", heads = 4)
+    cnn_transformer = CNNTransformer(num_classes= 2, in_channels=1, heads=4)
+    train_loader, val_loader, test_loader = prepare_ds_base(batch_size=32)
+    optimizer = torch.optim.AdamW(cnn_transformer.parameters(), lr=1e-5, weight_decay=0.2)
+    checkpoint = torch.load("./logs/BoneDataset/MagbooCBAM-1TransformerBlock/models/model_601.pt", map_location='cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Step 3: Load state_dicts
+    cnn_transformer.load_state_dict(checkpoint['model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    cnn_transformer.eval()  # set to eval mode
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    cnn_transformer.to(device)
+    images, preds, labels, filenames = evaluate_model(cnn_transformer, test_loader, device=device)
+    show_correct_and_wrong(images, preds, labels, filenames)
+
+
 
 
 

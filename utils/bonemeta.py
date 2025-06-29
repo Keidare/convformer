@@ -25,6 +25,8 @@ class BoneDataset(Dataset):
     img_path = os.path.join(self.root_dir, self.annotations.iloc[index, 0])
     image = Image.open(img_path).convert("L")
     y_label = int(self.annotations.iloc[index, 1])
+    filename = self.annotations.iloc[index, 0]
+
 
     if self.transform:
       image = self.transform(image)
@@ -32,7 +34,7 @@ class BoneDataset(Dataset):
     # Min-max normalization
     image = np.array(image).astype(np.float32) / 255.0
 
-    return image, y_label
+    return image, y_label, filename
   
 def prepare_ds(batch_size=32, csv_file='data/GT_Final.csv', root_dir='data/augmented/'):
     import re
@@ -94,12 +96,12 @@ def prepare_ds(batch_size=32, csv_file='data/GT_Final.csv', root_dir='data/augme
 
     # Transforms
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((256, 256)),
         transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
         transforms.ToTensor()
     ])
     test_val_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((256, 256)),
         transforms.ToTensor()
     ])
 
@@ -142,12 +144,12 @@ def prepare_ds_base(batch_size=32, csv_file='data/ground.csv', root_dir='data/bo
     # Define transforms
 
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((256, 256)),
         transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
         transforms.ToTensor()
     ])
     test_val_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((256, 256)),
         transforms.ToTensor()
     ])
 
